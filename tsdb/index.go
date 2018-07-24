@@ -32,7 +32,7 @@ type Index interface {
 	InitializeSeries(keys, names [][]byte, tags []models.Tags) error
 	CreateSeriesIfNotExists(key, name []byte, tags models.Tags) error
 	CreateSeriesListIfNotExists(keys, names [][]byte, tags []models.Tags) error
-	DropSeries(seriesID uint64, key []byte, cascade bool) error
+	DropSeries(seriesID SeriesID, key []byte, cascade bool) error
 	DropMeasurementIfSeriesNotExist(name []byte) error
 
 	MeasurementsSketches() (estimator.Sketch, estimator.Sketch, error)
@@ -112,7 +112,7 @@ func (itr *seriesIteratorAdapter) Next() (SeriesElem, error) {
 		elem, err := itr.itr.Next()
 		if err != nil {
 			return nil, err
-		} else if elem.SeriesID == 0 {
+		} else if elem.SeriesID.IsZero() {
 			return nil, nil
 		}
 
@@ -148,7 +148,7 @@ func (e *seriesElemAdapter) Expr() influxql.Expr { return e.expr }
 
 // SeriesIDElem represents a single series and optional expression.
 type SeriesIDElem struct {
-	SeriesID uint64
+	SeriesID SeriesID
 	Expr     influxql.Expr
 }
 
@@ -157,7 +157,7 @@ type SeriesIDElems []SeriesIDElem
 
 func (a SeriesIDElems) Len() int           { return len(a) }
 func (a SeriesIDElems) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a SeriesIDElems) Less(i, j int) bool { return a[i].SeriesID < a[j].SeriesID }
+func (a SeriesIDElems) Less(i, j int) bool { return a[i].SeriesID.Less(a[j].SeriesID) }
 
 // SeriesIDIterator represents a iterator over a list of series ids.
 type SeriesIDIterator interface {
@@ -187,7 +187,7 @@ func (itr *seriesIDSetIterator) Next() (SeriesIDElem, error) {
 	if !itr.itr.HasNext() {
 		return SeriesIDElem{}, nil
 	}
-	return SeriesIDElem{SeriesID: uint64(itr.itr.Next())}, nil
+	return SeriesIDElem{SeriesID: NewSeriesID(uint64(itr.itr.Next()))}, nil
 }
 
 func (itr *seriesIDSetIterator) Close() error { return nil }
@@ -213,17 +213,17 @@ func NewSeriesIDSetIterators(itrs []SeriesIDIterator) []SeriesIDSetIterator {
 }
 
 // ReadAllSeriesIDIterator returns all ids from the iterator.
-func ReadAllSeriesIDIterator(itr SeriesIDIterator) ([]uint64, error) {
+func ReadAllSeriesIDIterator(itr SeriesIDIterator) ([]SeriesID, error) {
 	if itr == nil {
 		return nil, nil
 	}
 
-	var a []uint64
+	var a []SeriesID
 	for {
 		e, err := itr.Next()
 		if err != nil {
 			return nil, err
-		} else if e.SeriesID == 0 {
+		} else if e.SeriesID.IsZero() {
 			break
 		}
 		a = append(a, e.SeriesID)
@@ -232,13 +232,13 @@ func ReadAllSeriesIDIterator(itr SeriesIDIterator) ([]uint64, error) {
 }
 
 // NewSeriesIDSliceIterator returns a SeriesIDIterator that iterates over a slice.
-func NewSeriesIDSliceIterator(ids []uint64) *SeriesIDSliceIterator {
+func NewSeriesIDSliceIterator(ids []SeriesID) *SeriesIDSliceIterator {
 	return &SeriesIDSliceIterator{ids: ids}
 }
 
 // SeriesIDSliceIterator iterates over a slice of series ids.
 type SeriesIDSliceIterator struct {
-	ids []uint64
+	ids []SeriesID
 }
 
 // Next returns the next series id in the slice.
@@ -315,7 +315,7 @@ func (itr *seriesQueryAdapterIterator) Next() (*query.FloatPoint, error) {
 		e, err := itr.itr.Next()
 		if err != nil {
 			return nil, err
-		} else if e.SeriesID == 0 {
+		} else if e.SeriesID.IsZero() {
 			return nil, nil
 		}
 
@@ -363,7 +363,7 @@ func (itr *filterUndeletedSeriesIDIterator) Next() (SeriesIDElem, error) {
 		e, err := itr.itr.Next()
 		if err != nil {
 			return SeriesIDElem{}, err
-		} else if e.SeriesID == 0 {
+		} else if e.SeriesID.IsZero() {
 			return SeriesIDElem{}, nil
 		} else if itr.sfile.IsDeleted(e.SeriesID) {
 			continue
@@ -399,7 +399,7 @@ func (itr *seriesIDExprIterator) Next() (SeriesIDElem, error) {
 	elem, err := itr.itr.Next()
 	if err != nil {
 		return SeriesIDElem{}, err
-	} else if elem.SeriesID == 0 {
+	} else if elem.SeriesID.IsZero() {
 		return SeriesIDElem{}, nil
 	}
 	elem.Expr = itr.expr
@@ -454,30 +454,30 @@ func (itr *seriesIDMergeIterator) Next() (SeriesIDElem, error) {
 		buf := &itr.buf[i]
 
 		// Fill buffer.
-		if buf.SeriesID == 0 {
+		if buf.SeriesID.IsZero() {
 			elem, err := itr.itrs[i].Next()
 			if err != nil {
 				return SeriesIDElem{}, nil
-			} else if elem.SeriesID == 0 {
+			} else if elem.SeriesID.IsZero() {
 				continue
 			}
 			itr.buf[i] = elem
 		}
 
-		if elem.SeriesID == 0 || buf.SeriesID < elem.SeriesID {
+		if elem.SeriesID.IsZero() || buf.SeriesID.Less(elem.SeriesID) {
 			elem = *buf
 		}
 	}
 
 	// Return EOF if no elements remaining.
-	if elem.SeriesID == 0 {
+	if elem.SeriesID.IsZero() {
 		return SeriesIDElem{}, nil
 	}
 
 	// Clear matching buffers.
 	for i := range itr.buf {
 		if itr.buf[i].SeriesID == elem.SeriesID {
-			itr.buf[i].SeriesID = 0
+			itr.buf[i].SeriesID = SeriesID{}
 		}
 	}
 	return elem, nil
@@ -527,28 +527,28 @@ func (itr *seriesIDIntersectIterator) Close() (err error) {
 func (itr *seriesIDIntersectIterator) Next() (_ SeriesIDElem, err error) {
 	for {
 		// Fill buffers.
-		if itr.buf[0].SeriesID == 0 {
+		if itr.buf[0].SeriesID.IsZero() {
 			if itr.buf[0], err = itr.itrs[0].Next(); err != nil {
 				return SeriesIDElem{}, err
 			}
 		}
-		if itr.buf[1].SeriesID == 0 {
+		if itr.buf[1].SeriesID.IsZero() {
 			if itr.buf[1], err = itr.itrs[1].Next(); err != nil {
 				return SeriesIDElem{}, err
 			}
 		}
 
 		// Exit if either buffer is still empty.
-		if itr.buf[0].SeriesID == 0 || itr.buf[1].SeriesID == 0 {
+		if itr.buf[0].SeriesID.IsZero() || itr.buf[1].SeriesID.IsZero() {
 			return SeriesIDElem{}, nil
 		}
 
 		// Skip if both series are not equal.
-		if a, b := itr.buf[0].SeriesID, itr.buf[1].SeriesID; a < b {
-			itr.buf[0].SeriesID = 0
+		if a, b := itr.buf[0].SeriesID, itr.buf[1].SeriesID; a.Less(b) {
+			itr.buf[0].SeriesID = SeriesID{}
 			continue
-		} else if a > b {
-			itr.buf[1].SeriesID = 0
+		} else if a.Greater(b) {
+			itr.buf[1].SeriesID = SeriesID{}
 			continue
 		}
 
@@ -570,7 +570,7 @@ func (itr *seriesIDIntersectIterator) Next() (_ SeriesIDElem, err error) {
 			}, nil)
 		}
 
-		itr.buf[0].SeriesID, itr.buf[1].SeriesID = 0, 0
+		itr.buf[0].SeriesID, itr.buf[1].SeriesID = SeriesID{}, SeriesID{}
 		return elem, nil
 	}
 }
@@ -617,27 +617,27 @@ func (itr *seriesIDUnionIterator) Close() (err error) {
 // Next returns the next element which occurs in both iterators.
 func (itr *seriesIDUnionIterator) Next() (_ SeriesIDElem, err error) {
 	// Fill buffers.
-	if itr.buf[0].SeriesID == 0 {
+	if itr.buf[0].SeriesID.IsZero() {
 		if itr.buf[0], err = itr.itrs[0].Next(); err != nil {
 			return SeriesIDElem{}, err
 		}
 	}
-	if itr.buf[1].SeriesID == 0 {
+	if itr.buf[1].SeriesID.IsZero() {
 		if itr.buf[1], err = itr.itrs[1].Next(); err != nil {
 			return SeriesIDElem{}, err
 		}
 	}
 
 	// Return non-zero or lesser series.
-	if a, b := itr.buf[0].SeriesID, itr.buf[1].SeriesID; a == 0 && b == 0 {
+	if a, b := itr.buf[0].SeriesID, itr.buf[1].SeriesID; a.IsZero() && b.IsZero() {
 		return SeriesIDElem{}, nil
-	} else if b == 0 || (a != 0 && a < b) {
+	} else if b.IsZero() || (!a.IsZero() && a.Less(b)) {
 		elem := itr.buf[0]
-		itr.buf[0].SeriesID = 0
+		itr.buf[0].SeriesID = SeriesID{}
 		return elem, nil
-	} else if a == 0 || (b != 0 && a > b) {
+	} else if a.IsZero() || (!b.IsZero() && a.Greater(b)) {
 		elem := itr.buf[1]
-		itr.buf[1].SeriesID = 0
+		itr.buf[1].SeriesID = SeriesID{}
 		return elem, nil
 	}
 
@@ -657,7 +657,7 @@ func (itr *seriesIDUnionIterator) Next() (_ SeriesIDElem, err error) {
 		elem.Expr = nil
 	}
 
-	itr.buf[0].SeriesID, itr.buf[1].SeriesID = 0, 0
+	itr.buf[0].SeriesID, itr.buf[1].SeriesID = SeriesID{}, SeriesID{}
 	return elem, nil
 }
 
@@ -703,38 +703,38 @@ func (itr *seriesIDDifferenceIterator) Close() (err error) {
 func (itr *seriesIDDifferenceIterator) Next() (_ SeriesIDElem, err error) {
 	for {
 		// Fill buffers.
-		if itr.buf[0].SeriesID == 0 {
+		if itr.buf[0].SeriesID.IsZero() {
 			if itr.buf[0], err = itr.itrs[0].Next(); err != nil {
 				return SeriesIDElem{}, err
 			}
 		}
-		if itr.buf[1].SeriesID == 0 {
+		if itr.buf[1].SeriesID.IsZero() {
 			if itr.buf[1], err = itr.itrs[1].Next(); err != nil {
 				return SeriesIDElem{}, err
 			}
 		}
 
 		// Exit if first buffer is still empty.
-		if itr.buf[0].SeriesID == 0 {
+		if itr.buf[0].SeriesID.IsZero() {
 			return SeriesIDElem{}, nil
-		} else if itr.buf[1].SeriesID == 0 {
+		} else if itr.buf[1].SeriesID.IsZero() {
 			elem := itr.buf[0]
-			itr.buf[0].SeriesID = 0
+			itr.buf[0].SeriesID = SeriesID{}
 			return elem, nil
 		}
 
 		// Return first series if it's less.
 		// If second series is less then skip it.
 		// If both series are equal then skip both.
-		if a, b := itr.buf[0].SeriesID, itr.buf[1].SeriesID; a < b {
+		if a, b := itr.buf[0].SeriesID, itr.buf[1].SeriesID; a.Less(b) {
 			elem := itr.buf[0]
-			itr.buf[0].SeriesID = 0
+			itr.buf[0].SeriesID = SeriesID{}
 			return elem, nil
-		} else if a > b {
-			itr.buf[1].SeriesID = 0
+		} else if a.Greater(b) {
+			itr.buf[1].SeriesID = SeriesID{}
 			continue
 		} else {
-			itr.buf[0].SeriesID, itr.buf[1].SeriesID = 0, 0
+			itr.buf[0].SeriesID, itr.buf[1].SeriesID = SeriesID{}, SeriesID{}
 			continue
 		}
 	}
@@ -857,7 +857,7 @@ func (itr *seriesPointIterator) readSeriesKeys(name []byte) error {
 		elem, err := sitr.Next()
 		if err != nil {
 			return err
-		} else if elem.SeriesID == 0 {
+		} else if elem.SeriesID.IsZero() {
 			break
 		}
 
@@ -1490,7 +1490,7 @@ func (is IndexSet) measurementNamesByTagFilter(auth query.Authorizer, op influxq
 						return nil, err
 					}
 
-					if se.SeriesID == 0 {
+					if se.SeriesID.IsZero() {
 						break
 					}
 
@@ -1558,7 +1558,7 @@ func (is IndexSet) measurementAuthorizedSeries(auth query.Authorizer, name []byt
 			return false
 		}
 
-		if series.SeriesID == 0 {
+		if series.SeriesID.IsZero() {
 			return false // End of iterator
 		}
 
@@ -1689,7 +1689,7 @@ func (is IndexSet) TagKeyHasAuthorizedSeries(auth query.Authorizer, name, tagKey
 			return false, err
 		}
 
-		if e.SeriesID == 0 {
+		if e.SeriesID.IsZero() {
 			return false, nil
 		}
 
@@ -1892,7 +1892,7 @@ func (is IndexSet) MeasurementSeriesKeysByExpr(name []byte, expr influxql.Expr) 
 		e, err := itr.Next()
 		if err != nil {
 			return nil, err
-		} else if e.SeriesID == 0 {
+		} else if e.SeriesID.IsZero() {
 			break
 		}
 
@@ -2366,7 +2366,7 @@ func (is IndexSet) tagValuesByKeyAndExpr(auth query.Authorizer, name []byte, key
 		e, err := itr.Next()
 		if err != nil {
 			return nil, err
-		} else if e.SeriesID == 0 {
+		} else if e.SeriesID.IsZero() {
 			break
 		}
 
@@ -2471,7 +2471,7 @@ func (is IndexSet) MeasurementTagKeyValuesByExpr(auth query.Authorizer, name []b
 						return nil, err
 					}
 
-					if se.SeriesID == 0 {
+					if se.SeriesID.IsZero() {
 						break
 					}
 
@@ -2552,7 +2552,7 @@ func (is IndexSet) TagSets(sfile *SeriesFile, name []byte, opt query.IteratorOpt
 		se, err := itr.Next()
 		if err != nil {
 			return nil, err
-		} else if se.SeriesID == 0 {
+		} else if se.SeriesID.IsZero() {
 			break
 		}
 

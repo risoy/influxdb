@@ -1629,7 +1629,7 @@ func (e *Engine) deleteSeriesRange(seriesKeys [][]byte, min, max int64) error {
 
 			name, tags := models.ParseKeyBytes(k)
 			sid := e.sfile.SeriesID(name, tags, buf)
-			if sid == 0 {
+			if sid.IsZero() {
 				continue
 			}
 
@@ -1678,7 +1678,7 @@ func (e *Engine) deleteSeriesRange(seriesKeys [][]byte, min, max int64) error {
 		// Remove the remaining ids from the series file as they no longer exist
 		// in any shard.
 		var err error
-		ids.ForEach(func(id uint64) {
+		ids.ForEach(func(id tsdb.SeriesID) {
 			name, tags := e.sfile.Series(id)
 			if err1 := e.sfile.DeleteSeriesID(id); err1 != nil {
 				err = err1

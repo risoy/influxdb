@@ -701,7 +701,7 @@ func (s *Store) DeleteShard(shardID uint64) error {
 	if ss.Cardinality() > 0 {
 		sfile := s.seriesFile(db)
 		if sfile != nil {
-			ss.ForEach(func(id uint64) {
+			ss.ForEach(func(id SeriesID) {
 				sfile.DeleteSeriesID(id)
 			})
 		}
