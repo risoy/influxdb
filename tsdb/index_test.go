@@ -66,12 +66,12 @@ func TestIndexSet_MeasurementNamesByExpr(t *testing.T) {
 	indexes := map[string]*Index{}
 	for _, name := range tsdb.RegisteredIndexes() {
 		idx := MustOpenNewIndex(name)
-		idx.AddSeries("cpu", map[string]string{"region": "east"})
-		idx.AddSeries("cpu", map[string]string{"region": "west", "secret": "foo"})
-		idx.AddSeries("disk", map[string]string{"secret": "foo"})
-		idx.AddSeries("mem", map[string]string{"region": "west"})
-		idx.AddSeries("gpu", map[string]string{"region": "east"})
-		idx.AddSeries("pci", map[string]string{"region": "east", "secret": "foo"})
+		idx.AddSeries("cpu", map[string]string{"region": "east"}, models.Integer)
+		idx.AddSeries("cpu", map[string]string{"region": "west", "secret": "foo"}, models.Integer)
+		idx.AddSeries("disk", map[string]string{"secret": "foo"}, models.Integer)
+		idx.AddSeries("mem", map[string]string{"region": "west"}, models.Integer)
+		idx.AddSeries("gpu", map[string]string{"region": "east"}, models.Integer)
+		idx.AddSeries("pci", map[string]string{"region": "east", "secret": "foo"}, models.Integer)
 		indexes[name] = idx
 		defer idx.Close()
 	}
@@ -253,7 +253,7 @@ func TestIndex_Sketches(t *testing.T) {
 		series := genTestSeries(10, 5, 3)
 		// Add series to index.
 		for _, serie := range series {
-			if err := idx.AddSeries(serie.Measurement, serie.Tags.Map()); err != nil {
+			if err := idx.AddSeries(serie.Measurement, serie.Tags.Map(), serie.Type); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -377,10 +377,10 @@ func (idx *Index) IndexSet() *tsdb.IndexSet {
 	return &tsdb.IndexSet{Indexes: []tsdb.Index{idx.Index}, SeriesFile: idx.sfile}
 }
 
-func (idx *Index) AddSeries(name string, tags map[string]string) error {
+func (idx *Index) AddSeries(name string, tags map[string]string, typ models.FieldType) error {
 	t := models.NewTags(tags)
 	key := fmt.Sprintf("%s,%s", name, t.HashKey())
-	return idx.CreateSeriesIfNotExists([]byte(key), []byte(name), t)
+	return idx.CreateSeriesIfNotExists([]byte(key), []byte(name), t, typ)
 }
 
 // Reopen closes and re-opens the underlying index, without removing any data.
