@@ -624,7 +624,7 @@ func (i *Index) CreateSeriesListIfNotExists(keys [][]byte, names [][]byte, tagsS
 				}
 
 				// Some cached bitset results may need to be updated.
-				i.tagValueCache.mu.RLock()
+				i.tagValueCache.RLock()
 				for j, id := range ids {
 					if id == 0 {
 						continue
@@ -652,7 +652,7 @@ func (i *Index) CreateSeriesListIfNotExists(keys [][]byte, names [][]byte, tagsS
 						}
 					}
 				}
-				i.tagValueCache.mu.RUnlock()
+				i.tagValueCache.RUnlock()
 
 				errC <- err
 			}
@@ -681,7 +681,7 @@ func (i *Index) CreateSeriesIfNotExists(key, name []byte, tags models.Tags) erro
 
 	// If there are cached sets for any of the tag pairs, they will need to be
 	// updated with the series id.
-	i.tagValueCache.mu.RLock()
+	i.tagValueCache.RLock()
 	if i.tagValueCache.measurementContainsSets(name) {
 		for _, pair := range tags {
 			// TODO(edd): It's not clear to me yet whether it will be better to take a lock
@@ -698,7 +698,7 @@ func (i *Index) CreateSeriesIfNotExists(key, name []byte, tags models.Tags) erro
 			i.tagValueCache.addToSet(name, pair.Key, pair.Value, ids[0]) // Takes a lock on the series id set
 		}
 	}
-	i.tagValueCache.mu.RUnlock()
+	i.tagValueCache.RUnlock()
 	return nil
 }
 
