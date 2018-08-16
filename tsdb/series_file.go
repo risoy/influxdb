@@ -378,6 +378,8 @@ func parseSeriesKey(data []byte, dst models.Tags) ([]byte, models.Tags) {
 
 	if got, want := len(dst), tagN; got < want {
 		dst = append(dst, make(models.Tags, want-got)...)
+	} else if got > want {
+		dst = dst[:want]
 	}
 
 	for i := 0; i < tagN; i++ {
