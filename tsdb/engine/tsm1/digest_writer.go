@@ -12,11 +12,12 @@ import (
 // representation of the contents of a shard.  It can be scoped to one or more series
 // keys, ranges of times or sets of files.
 type DigestWriter struct {
-	w io.WriteCloser
+	w  io.WriteCloser
+	sw *snappy.Writer
 }
 
 func NewDigestWriter(w io.WriteCloser) (*DigestWriter, error) {
-	return &DigestWriter{w: snappy.NewBufferedWriter(w)}, nil
+	return &DigestWriter{w: w, sw: snappy.NewBufferedWriter(w)}, nil
 }
 
 func (w *DigestWriter) WriteManifest(m *DigestManifest) error {
@@ -26,42 +27,42 @@ func (w *DigestWriter) WriteManifest(m *DigestManifest) error {
 	}
 
 	// Write length of manifest.
-	if err := binary.Write(w.w, binary.BigEndian, uint32(len(b))); err != nil {
+	if err := binary.Write(w.sw, binary.BigEndian, uint32(len(b))); err != nil {
 		return err
 	}
 
 	// Write manifest.
-	_, err = w.w.Write(b)
+	_, err = w.sw.Write(b)
 	return err
 }
 
 func (w *DigestWriter) WriteTimeSpan(key string, t *DigestTimeSpan) error {
-	if err := binary.Write(w.w, binary.BigEndian, uint16(len(key))); err != nil {
+	if err := binary.Write(w.sw, binary.BigEndian, uint16(len(key))); err != nil {
 		return err
 	}
 
-	if _, err := w.w.Write([]byte(key)); err != nil {
+	if _, err := w.sw.Write([]byte(key)); err != nil {
 		return err
 	}
 
-	if err := binary.Write(w.w, binary.BigEndian, uint32(t.Len())); err != nil {
+	if err := binary.Write(w.sw, binary.BigEndian, uint32(t.Len())); err != nil {
 		return err
 	}
 
 	for _, tr := range t.Ranges {
-		if err := binary.Write(w.w, binary.BigEndian, tr.Min); err != nil {
+		if err := binary.Write(w.sw, binary.BigEndian, tr.Min); err != nil {
 			return err
 		}
 
-		if err := binary.Write(w.w, binary.BigEndian, tr.Max); err != nil {
+		if err := binary.Write(w.sw, binary.BigEndian, tr.Max); err != nil {
 			return err
 		}
 
-		if err := binary.Write(w.w, binary.BigEndian, tr.CRC); err != nil {
+		if err := binary.Write(w.sw, binary.BigEndian, tr.CRC); err != nil {
 			return err
 		}
 
-		if err := binary.Write(w.w, binary.BigEndian, uint16(tr.N)); err != nil {
+		if err := binary.Write(w.sw, binary.BigEndian, uint16(tr.N)); err != nil {
 			return err
 		}
 	}
@@ -70,11 +71,15 @@ func (w *DigestWriter) WriteTimeSpan(key string, t *DigestTimeSpan) error {
 }
 
 func (w *DigestWriter) Flush() error {
-	return nil
+	return w.sw.Flush()
 }
 
 func (w *DigestWriter) Close() error {
 	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	if err := w.sw.Close(); err != nil {
 		return err
 	}
 
