@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 )
 
-//go:generate protoc -I$GOPATH/src/github.com/influxdata/influxdb/vendor -I. --gogofaster_out=Mgoogle/protobuf/empty.proto=github.com/gogo/protobuf/types,plugins=grpc:. storage.proto predicate.proto
+//go:generate protoc -I$GOPATH/src/github.com/influxdata/influxdb/vendor -I. --gogofaster_out=Mgoogle/protobuf/empty.proto=github.com/gogo/protobuf/types,Mgoogle/protobuf/any.proto=github.com/gogo/protobuf/types,plugins=grpc:. storage_common.proto storage.proto predicate.proto
 //go:generate tmpl -data=@array_cursor.gen.go.tmpldata array_cursor.gen.go.tmpl
 //go:generate tmpl -data=@array_cursor.gen.go.tmpldata response_writer.gen.go.tmpl
 
@@ -28,7 +28,7 @@ const (
 type rpcService struct {
 	loggingEnabled bool
 
-	Store  *Store
+	Store  Store
 	Logger *zap.Logger
 }
 
@@ -41,7 +41,6 @@ func (r *rpcService) Hints(context.Context, *types.Empty) (*HintsResponse, error
 }
 
 func (r *rpcService) Read(req *ReadRequest, stream Storage_ReadServer) error {
-	var err error
 	var wire opentracing.SpanContext
 
 	if len(req.Trace) > 0 {
@@ -106,12 +105,7 @@ func (r *rpcService) Read(req *ReadRequest, stream Storage_ReadServer) error {
 		req.PointsLimit = math.MaxInt64
 	}
 
-	w := &responseWriter{
-		stream: stream,
-		res:    &ReadResponse{Frames: make([]ReadResponse_Frame, 0, frameCount)},
-		logger: log,
-		hints:  req.Hints,
-	}
+	w := NewResponseWriter(stream, req.Hints)
 
 	switch req.Group {
 	case GroupBy, GroupExcept:
@@ -127,16 +121,10 @@ func (r *rpcService) Read(req *ReadRequest, stream Storage_ReadServer) error {
 	}
 
 	if req.Group == GroupAll {
-		err = r.handleRead(ctx, req, w)
+		r.handleRead(ctx, log, req, w)
 	} else {
-		err = r.handleGroupRead(ctx, req, w)
+		r.handleGroupRead(ctx, log, req, w)
 	}
-
-	if err != nil {
-		log.Error("Read failed", zap.Error(err))
-	}
-
-	w.flushFrames()
 
 	if r.loggingEnabled {
 		log.Info("Read completed", zap.Int("num_values", w.vc))
@@ -154,68 +142,40 @@ func (r *rpcService) Read(req *ReadRequest, stream Storage_ReadServer) error {
 	return nil
 }
 
-func (r *rpcService) handleRead(ctx context.Context, req *ReadRequest, w *responseWriter) error {
+func (r *rpcService) handleRead(ctx context.Context, log *zap.Logger, req *ReadRequest, w *ResponseWriter) {
 	rs, err := r.Store.Read(ctx, req)
 	if err != nil {
-		return err
+		log.Error("Read failed", zap.Error(w.Err()))
+		return
 	}
 
 	if rs == nil {
-		return nil
+		return
 	}
 	defer rs.Close()
+	w.WriteResultSet(rs)
+	w.Flush()
 
-	for rs.Next() {
-		cur := rs.Cursor()
-		if cur == nil {
-			// no data for series key + field combination
-			continue
-		}
-
-		w.startSeries(rs.Tags())
-		w.streamCursor(cur)
-		if w.err != nil {
-			cur.Close()
-			return w.err
-		}
+	if w.Err() != nil {
+		log.Error("Write failed", zap.Error(w.Err()))
 	}
-
-	return nil
 }
 
-func (r *rpcService) handleGroupRead(ctx context.Context, req *ReadRequest, w *responseWriter) error {
+func (r *rpcService) handleGroupRead(ctx context.Context, log *zap.Logger, req *ReadRequest, w *ResponseWriter) {
 	rs, err := r.Store.GroupRead(ctx, req)
 	if err != nil {
-		return err
+		log.Error("GroupRead failed", zap.Error(w.Err()))
+		return
 	}
 
 	if rs == nil {
-		return nil
+		return
 	}
 	defer rs.Close()
+	w.WriteGroupResultSet(rs)
+	w.Flush()
 
-	gc := rs.Next()
-	for gc != nil {
-		w.startGroup(gc.Keys(), gc.PartitionKeyVals())
-		if !req.Hints.HintSchemaAllTime() {
-			for gc.Next() {
-				cur := gc.Cursor()
-				if cur == nil {
-					// no data for series key + field combination
-					continue
-				}
-
-				w.startSeries(gc.Tags())
-				w.streamCursor(cur)
-				if w.err != nil {
-					gc.Close()
-					return w.err
-				}
-			}
-		}
-		gc.Close()
-		gc = rs.Next()
+	if w.Err() != nil {
+		log.Error("Write failed", zap.Error(w.Err()))
 	}
-
-	return nil
 }

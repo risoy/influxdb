@@ -85,25 +85,24 @@ type multiShardArrayCursors struct {
 	}
 }
 
-func newMultiShardArrayCursors(ctx context.Context, rr *readRequest) *multiShardArrayCursors {
-	lim := rr.limit
-	if lim < 0 {
-		lim = 1
+func newMultiShardArrayCursors(ctx context.Context, start, end int64, asc bool, limit int64) *multiShardArrayCursors {
+	if limit < 0 {
+		limit = 1
 	}
 
 	m := &multiShardArrayCursors{
 		ctx:   ctx,
-		limit: lim,
+		limit: limit,
 		req: tsdb.CursorRequest{
-			Ascending: rr.asc,
-			StartTime: rr.start,
-			EndTime:   rr.end,
+			Ascending: asc,
+			StartTime: start,
+			EndTime:   end,
 		},
 	}
 
 	cc := cursorContext{
 		ctx:   ctx,
-		limit: lim,
+		limit: limit,
 		req:   &m.req,
 	}
 
@@ -116,10 +115,10 @@ func newMultiShardArrayCursors(ctx context.Context, rr *readRequest) *multiShard
 	return m
 }
 
-func (m *multiShardArrayCursors) createCursor(row seriesRow) tsdb.Cursor {
+func (m *multiShardArrayCursors) createCursor(row SeriesRow) tsdb.Cursor {
 	m.req.Name = row.name
 	m.req.Tags = row.stags
-	m.req.Field = row.field.n
+	m.req.Field = row.field
 
 	var cond expression
 	if row.valueCond != nil {

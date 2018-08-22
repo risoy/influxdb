@@ -41,7 +41,7 @@ func TestPlannerCondition(t *testing.T) {
 	var keys []string
 	row := p.Next()
 	for row != nil {
-		keys = append(keys, string(models.MakeKey(row.name, row.stags))+" "+row.field.n)
+		keys = append(keys, string(models.MakeKey(row.name, row.stags))+" "+row.field)
 		row = p.Next()
 	}
 

@@ -31,7 +31,7 @@ import (
 	"github.com/influxdata/influxdb/services/udp"
 	"github.com/influxdata/influxdb/tcp"
 	"github.com/influxdata/influxdb/tsdb"
-	client "github.com/influxdata/usage-client/v1"
+	"github.com/influxdata/usage-client/v1"
 	"go.uber.org/zap"
 
 	"github.com/influxdata/influxdb/services/storage"
@@ -286,12 +286,7 @@ func (s *Server) appendHTTPDService(c httpd.Config) {
 	srv.Handler.PointsWriter = s.PointsWriter
 	srv.Handler.Version = s.buildInfo.Version
 	srv.Handler.BuildType = "OSS"
-
-	// Wire up storage service for Prometheus endpoints.
-	storageStore := storage.NewStore()
-	storageStore.MetaClient = s.MetaClient
-	storageStore.TSDBStore = s.TSDBStore
-	srv.Handler.Store = storageStore
+	srv.Handler.Store = storage.NewStore(s.TSDBStore, s.MetaClient)
 
 	s.Services = append(s.Services, srv)
 }
